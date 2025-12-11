@@ -62,6 +62,21 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
         console.log("[v0] Round info:", roundInfo)
         setRound(roundInfo)
 
+        if (!roundInfo.active && status.isOwner && status.poolBalance > 0n) {
+          console.log("[v0] Current round is inactive and owner has balance. Attempting to auto-start...")
+          try {
+            await startNewRound(provider)
+            console.log("[v0] Auto-started new round successfully")
+            addToast("新轮次已自动启动！", "success")
+            // Fetch updated round data after auto-start
+            setTimeout(fetchRoundData, 1500)
+            return
+          } catch (err) {
+            console.log("[v0] Auto-start failed (may be within cooldown):", err)
+            // Continue with normal flow if auto-start fails
+          }
+        }
+
         if (roundInfo.packetCount > 0) {
           const packetsList = []
           for (let i = 0; i < roundInfo.packetCount; i++) {
