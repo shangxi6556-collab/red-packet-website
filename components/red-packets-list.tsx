@@ -29,62 +29,55 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
   const [timeRemaining, setTimeRemaining] = useState<number>(0)
   const [poolStatus, setPoolStatus] = useState<any>(null)
   const [startingRound, setStartingRound] = useState(false)
+  const [autoStartStatus, setAutoStartStatus] = useState<string>("")
   const { addToast } = useToast()
 
   useEffect(() => {
-    const attemptAutoStart = async () => {
+    if (!window.ethereum || !poolStatus?.isOwner) return
+
+    const checkAndAutoStart = async () => {
       try {
-        console.log("[v0] Auto-start check triggered")
-        console.log("[v0] poolStatus:", poolStatus)
-        console.log("[v0] poolStatus.isOwner:", poolStatus?.isOwner)
-        console.log("[v0] window.ethereum:", !!window.ethereum)
-
-        if (!window.ethereum) {
-          console.log("[v0] No ethereum provider")
-          return
-        }
-
-        if (!poolStatus?.isOwner) {
-          console.log("[v0] Not owner, skipping auto-start")
-          return
-        }
-
         const provider = new BrowserProvider(window.ethereum)
         const roundData = await getCurrentRound(provider)
-        console.log("[v0] Round data:", roundData)
-
         const roundActive = roundData[5]
         const poolBalance = poolStatus.poolBalance
 
-        console.log("[v0] Auto-start conditions - Active:", roundActive, "Balance:", formatBNB(poolBalance), "BNB")
+        setAutoStartStatus(`检查中... 轮次活跃: ${roundActive}, 池余额: ${formatBNB(poolBalance)}`)
 
         if (!roundActive && poolBalance > 0n) {
-          console.log("[v0] Conditions met! Attempting to start new round...")
+          setAutoStartStatus("条件满足，自动启动中...")
           try {
-            const result = await startNewRound(provider)
-            console.log("[v0] Auto-start successful! Result:", result)
+            await startNewRound(provider)
+            setAutoStartStatus("✓ 自动启动成功！")
             addToast("新轮次已自动启动！", "success")
+            // Wait and refresh
+            await new Promise((resolve) => setTimeout(resolve, 2000))
+            window.location.reload()
           } catch (err: any) {
-            const errMsg = err.message || String(err)
-            console.log("[v0] Auto-start failed with error:", errMsg)
-            // Only show error if it's not the 1-hour wait message
-            if (!errMsg.includes("Please wait")) {
-              console.log("[v0] Non-waiting error, logging it")
+            const msg = err.message || String(err)
+            if (msg.includes("Please wait")) {
+              setAutoStartStatus(`⏳ ${msg}`)
+            } else {
+              setAutoStartStatus(`✗ 启动失败: ${msg.substring(0, 50)}`)
             }
           }
         } else {
-          console.log("[v0] Auto-start conditions not met")
-          console.log("[v0]   Round active:", roundActive)
-          console.log("[v0]   Pool balance:", formatBNB(poolBalance))
+          if (!poolBalance || poolBalance === 0n) {
+            setAutoStartStatus("⚠️ 池中没有BNB，无法启动")
+          } else if (roundActive) {
+            setAutoStartStatus("当前轮次仍活跃")
+          }
         }
       } catch (err) {
-        console.error("[v0] Error in auto-start check:", err)
+        setAutoStartStatus(`错误: ${String(err).substring(0, 50)}`)
       }
     }
 
-    console.log("[v0] Auto-start useEffect dependencies changed - poolStatus:", poolStatus)
-    attemptAutoStart()
-  }, [poolStatus, addToast])
+    // Check every 10 seconds when owner is connected
+    const interval = setInterval(checkAndAutoStart, 10000)
+    checkAndAutoStart() // Check immediately
+    return () => clearInterval(interval)
+  }, [poolStatus?.isOwner, poolStatus?.poolBalance, addToast])
 
   useEffect(() => {
     const fetchRoundData = async () => {
@@ -274,14 +267,19 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
               池余额: <span className="font-semibold text-blue-600">{formatBNB(poolStatus.poolBalance)} BNB</span>
             </p>
             {poolStatus.isOwner && (
-              <div className="pt-2">
-                <p className="text-xs text-gray-600 mb-2">您是合约所有者</p>
+              <div className="pt-2 space-y-2">
+                <p className="text-xs text-gray-600">✓ 您是合约所有者</p>
+                {autoStartStatus && (
+                  <p className="text-xs text-blue-600 bg-blue-100 p-2 rounded break-words">
+                    自动启动状态: {autoStartStatus}
+                  </p>
+                )}
                 <Button
                   onClick={handleStartRound}
                   disabled={startingRound}
                   className="w-full bg-blue-600 hover:bg-blue-700 text-white"
                 >
-                  {startingRound ? "正在启动轮次..." : "启动新轮次"}
+                  {startingRound ? "正在启动轮次..." : "手动启动新轮次"}
                 </Button>
               </div>
             )}
@@ -335,7 +333,7 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
               }`}
             >
               <p className="text-3xl mb-2">{packet.claimed ? "✓" : "🧧"}</p>
-              <p className="font-bold text-red-600 mb-2">{formatBNB(packet.amount)} BNB</p>
+              <p className="font-bold text-red-600 mb-2">{packet.claimed ? formatBNB(packet.amount) : "?"}</p>
               {packet.claimed ? (
                 <p className="text-xs text-gray-500">已领取</p>
               ) : (
