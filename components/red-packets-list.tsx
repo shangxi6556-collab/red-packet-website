@@ -4,6 +4,7 @@ import { useState, useEffect } from "react"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { BrowserProvider } from "ethers"
+import { formatEther } from "ethers"
 import {
   getCurrentRound,
   getPacket,
@@ -42,7 +43,6 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
         }
 
         const provider = new BrowserProvider(window.ethereum)
-        console.log("[v0] Provider created")
 
         const status = await getPoolStatus(provider, userAddress)
         setPoolStatus(status)
@@ -59,25 +59,45 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
           active: roundData[5],
         }
 
-        console.log("[v0] Round info:", roundInfo)
+        console.log("[v0] Round info - Active:", roundInfo.active, "RoundId:", roundInfo.roundId)
         setRound(roundInfo)
 
-        if (!roundInfo.active && status.isOwner && status.poolBalance > 0n) {
-          console.log("[v0] Current round is inactive and owner has balance. Attempting to auto-start...")
-          try {
-            await startNewRound(provider)
-            console.log("[v0] Auto-started new round successfully")
-            addToast("新轮次已自动启动！", "success")
-            // Fetch updated round data after auto-start
-            setTimeout(fetchRoundData, 1500)
-            return
-          } catch (err) {
-            console.log("[v0] Auto-start failed (may be within cooldown):", err)
-            // Continue with normal flow if auto-start fails
+        if (status.isOwner) {
+          console.log("[v0] User is owner. Checking if auto-start needed...")
+          console.log(
+            "[v0] Current round active:",
+            roundInfo.active,
+            "Pool balance:",
+            formatEther(status.poolBalance),
+            "BNB",
+          )
+
+          if (!roundInfo.active && status.poolBalance > 0n) {
+            console.log("[v0] Attempting auto-start: round inactive + has balance")
+            try {
+              await startNewRound(provider)
+              console.log("[v0] Auto-started new round successfully!")
+              addToast("新轮次已自动启动！", "success")
+              // Refresh immediately after successful start
+              setTimeout(() => {
+                console.log("[v0] Refreshing after auto-start...")
+                fetchRoundData()
+              }, 2000)
+              return
+            } catch (err: any) {
+              const errMsg = err.message || String(err)
+              if (errMsg.includes("Please wait")) {
+                console.log("[v0] Auto-start blocked by cooldown - will retry later:", errMsg)
+              } else {
+                console.log("[v0] Auto-start failed:", errMsg)
+                addToast(errMsg, "warning")
+              }
+            }
           }
         }
 
-        if (roundInfo.packetCount > 0) {
+        // Fetch packets only if round is active
+        if (roundInfo.active && roundInfo.packetCount > 0) {
           const packetsList = []
           for (let i = 0; i < roundInfo.packetCount; i++) {
             try {
@@ -93,8 +113,10 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
               console.error("[v0] Error fetching packet", i, ":", err)
             }
           }
-          console.log("[v0] Packets fetched:", packetsList)
+          console.log("[v0] Packets fetched:", packetsList.length)
           setPackets(packetsList)
+        } else {
+          setPackets([])
         }
 
         const remaining = getTimeRemaining(Number(roundInfo.startTime))
@@ -108,7 +130,7 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
     }
 
     fetchRoundData()
-    const interval = setInterval(fetchRoundData, 5000)
+    const interval = setInterval(fetchRoundData, 10000)
     return () => clearInterval(interval)
   }, [userAddress, addToast])
 
