@@ -29,47 +29,62 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
   const [timeRemaining, setTimeRemaining] = useState<number>(0)
   const [poolStatus, setPoolStatus] = useState<any>(null)
   const [startingRound, setStartingRound] = useState(false)
-  const [autoStartAttempted, setAutoStartAttempted] = useState(false)
   const { addToast } = useToast()
 
   useEffect(() => {
     const attemptAutoStart = async () => {
       try {
-        if (!window.ethereum || !poolStatus?.isOwner) {
+        console.log("[v0] Auto-start check triggered")
+        console.log("[v0] poolStatus:", poolStatus)
+        console.log("[v0] poolStatus.isOwner:", poolStatus?.isOwner)
+        console.log("[v0] window.ethereum:", !!window.ethereum)
+
+        if (!window.ethereum) {
+          console.log("[v0] No ethereum provider")
+          return
+        }
+
+        if (!poolStatus?.isOwner) {
+          console.log("[v0] Not owner, skipping auto-start")
           return
         }
 
         const provider = new BrowserProvider(window.ethereum)
         const roundData = await getCurrentRound(provider)
+        console.log("[v0] Round data:", roundData)
+
         const roundActive = roundData[5]
+        const poolBalance = poolStatus.poolBalance
 
-        console.log("[v0] Auto-start check - Round active:", roundActive, "Has balance:", poolStatus.poolBalance > 0n)
+        console.log("[v0] Auto-start conditions - Active:", roundActive, "Balance:", formatBNB(poolBalance), "BNB")
 
-        if (!roundActive && poolStatus.poolBalance > 0n) {
-          console.log("[v0] Auto-starting new round...")
+        if (!roundActive && poolBalance > 0n) {
+          console.log("[v0] Conditions met! Attempting to start new round...")
           try {
-            await startNewRound(provider)
-            console.log("[v0] Auto-start successful!")
+            const result = await startNewRound(provider)
+            console.log("[v0] Auto-start successful! Result:", result)
             addToast("新轮次已自动启动！", "success")
-            setAutoStartAttempted(true)
-            // Trigger refresh by setting a flag
-            setTimeout(() => {
-              setAutoStartAttempted(false)
-            }, 3000)
           } catch (err: any) {
-            const msg = err.message || String(err)
-            if (!msg.includes("Please wait")) {
-              console.log("[v0] Auto-start failed:", msg)
+            const errMsg = err.message || String(err)
+            console.log("[v0] Auto-start failed with error:", errMsg)
+            // Only show error if it's not the 1-hour wait message
+            if (!errMsg.includes("Please wait")) {
+              console.log("[v0] Non-waiting error, logging it")
             }
           }
+        } else {
+          console.log("[v0] Auto-start conditions not met")
+          console.log("[v0]   Round active:", roundActive)
+          console.log("[v0]   Pool balance:", formatBNB(poolBalance))
         }
       } catch (err) {
         console.error("[v0] Error in auto-start check:", err)
       }
     }
 
+    console.log("[v0] Auto-start useEffect dependencies changed - poolStatus:", poolStatus)
     attemptAutoStart()
-  }, [poolStatus?.isOwner, poolStatus?.poolBalance, addToast])
+  }, [poolStatus, addToast])
 
   useEffect(() => {
     const fetchRoundData = async () => {
@@ -138,7 +153,7 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
     fetchRoundData()
     const interval = setInterval(fetchRoundData, 5000)
     return () => clearInterval(interval)
-  }, [userAddress, addToast, autoStartAttempted])
+  }, [userAddress, addToast])
 
   useEffect(() => {
     const timer = setInterval(() => {
