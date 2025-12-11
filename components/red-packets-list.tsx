@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { BrowserProvider } from "ethers"
@@ -30,31 +30,51 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
   const [poolStatus, setPoolStatus] = useState<any>(null)
   const [startingRound, setStartingRound] = useState(false)
   const [autoStartStatus, setAutoStartStatus] = useState<string>("")
+  const autoStartTriggeredRef = useRef(false)
   const { addToast } = useToast()
 
   useEffect(() => {
-    if (!window.ethereum || !poolStatus?.isOwner) return
-
     const checkAndAutoStart = async () => {
       try {
+        if (!window.ethereum) return
+
         const provider = new BrowserProvider(window.ethereum)
+
+        // Get current pool status
+        const status = await getPoolStatus(provider, userAddress)
+        console.log("[v0] Auto-start check - Pool status:", status)
+
+        if (!status.isOwner) {
+          console.log("[v0] Not owner, skipping auto-start")
+          return
+        }
+
+        // Get current round data
         const roundData = await getCurrentRound(provider)
         const roundActive = roundData[5]
-        const poolBalance = poolStatus.poolBalance
+        const poolBalance = status.poolBalance
 
-        setAutoStartStatus(`检查中... 轮次活跃: ${roundActive}, 池余额: ${formatBNB(poolBalance)}`)
+        console.log("[v0] Auto-start check - Round active:", roundActive, "Pool balance:", formatBNB(poolBalance))
+
+        setAutoStartStatus(`检查中... 轮次活跃: ${roundActive}, 池余额: ${formatBNB(poolBalance)} BNB`)
 
         if (!roundActive && poolBalance > 0n) {
-          setAutoStartStatus("条件满足，自动启动中...")
+          setAutoStartStatus("条件满足，正在自动启动新轮次...")
+          console.log("[v0] Conditions met, attempting auto-start...")
+
           try {
             await startNewRound(provider)
-            setAutoStartStatus("✓ 自动启动成功！")
+            console.log("[v0] Auto-start successful!")
+            setAutoStartStatus("✓ 新轮次已自动启动！")
             addToast("新轮次已自动启动！", "success")
-            // Wait and refresh
+            autoStartTriggeredRef.current = true
+
+            // Wait and reload to show new round
             await new Promise((resolve) => setTimeout(resolve, 2000))
             window.location.reload()
           } catch (err: any) {
             const msg = err.message || String(err)
+            console.log("[v0] Auto-start failed:", msg)
             if (msg.includes("Please wait")) {
               setAutoStartStatus(`⏳ ${msg}`)
             } else {
@@ -62,22 +82,32 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
             }
           }
         } else {
+          let reason = ""
           if (!poolBalance || poolBalance === 0n) {
-            setAutoStartStatus("⚠️ 池中没有BNB，无法启动")
+            reason = "⚠️ 池中没有BNB，无法启动"
           } else if (roundActive) {
-            setAutoStartStatus("当前轮次仍活跃")
+            reason = "当前轮次仍活跃"
+          } else {
+            reason = "等待条件满足..."
           }
+          setAutoStartStatus(reason)
         }
       } catch (err) {
-        setAutoStartStatus(`错误: ${String(err).substring(0, 50)}`)
+        console.log("[v0] Auto-start check error:", err)
+        setAutoStartStatus(`错误: ${String(err).substring(0, 40)}`)
       }
     }
 
-    // Check every 10 seconds when owner is connected
-    const interval = setInterval(checkAndAutoStart, 10000)
-    checkAndAutoStart() // Check immediately
+    // Only check if user address exists and hasn't already auto-started
+    if (!userAddress || autoStartTriggeredRef.current) return
+
+    // Check immediately on mount
+    checkAndAutoStart()
+
+    // Then check every 30 seconds
+    const interval = setInterval(checkAndAutoStart, 30000)
     return () => clearInterval(interval)
-  }, [poolStatus?.isOwner, poolStatus?.poolBalance, addToast])
+  }, [userAddress, addToast])
 
   useEffect(() => {
     const fetchRoundData = async () => {
@@ -142,6 +172,8 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
         setLoading(false)
       }
     }
+
+    if (!userAddress) return
 
     fetchRoundData()
     const interval = setInterval(fetchRoundData, 5000)
@@ -270,9 +302,7 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
               <div className="pt-2 space-y-2">
                 <p className="text-xs text-gray-600">✓ 您是合约所有者</p>
                 {autoStartStatus && (
-                  <p className="text-xs text-blue-600 bg-blue-100 p-2 rounded break-words">
-                    自动启动状态: {autoStartStatus}
-                  </p>
+                  <p className="text-xs text-blue-600 bg-blue-100 p-2 rounded break-words">{autoStartStatus}</p>
                 )}
                 <Button
                   onClick={handleStartRound}
