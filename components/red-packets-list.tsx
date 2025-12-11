@@ -4,7 +4,6 @@ import { useState, useEffect } from "react"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { BrowserProvider } from "ethers"
-import { formatEther } from "ethers"
 import {
   getCurrentRound,
   getPacket,
@@ -30,7 +29,47 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
   const [timeRemaining, setTimeRemaining] = useState<number>(0)
   const [poolStatus, setPoolStatus] = useState<any>(null)
   const [startingRound, setStartingRound] = useState(false)
+  const [autoStartAttempted, setAutoStartAttempted] = useState(false)
   const { addToast } = useToast()
+
+  useEffect(() => {
+    const attemptAutoStart = async () => {
+      try {
+        if (!window.ethereum || !poolStatus?.isOwner) {
+          return
+        }
+
+        const provider = new BrowserProvider(window.ethereum)
+        const roundData = await getCurrentRound(provider)
+        const roundActive = roundData[5]
+
+        console.log("[v0] Auto-start check - Round active:", roundActive, "Has balance:", poolStatus.poolBalance > 0n)
+
+        if (!roundActive && poolStatus.poolBalance > 0n) {
+          console.log("[v0] Auto-starting new round...")
+          try {
+            await startNewRound(provider)
+            console.log("[v0] Auto-start successful!")
+            addToast("新轮次已自动启动！", "success")
+            setAutoStartAttempted(true)
+            // Trigger refresh by setting a flag
+            setTimeout(() => {
+              setAutoStartAttempted(false)
+            }, 3000)
+          } catch (err: any) {
+            const msg = err.message || String(err)
+            if (!msg.includes("Please wait")) {
+              console.log("[v0] Auto-start failed:", msg)
+            }
+          }
+        }
+      } catch (err) {
+        console.error("[v0] Error in auto-start check:", err)
+      }
+    }
+
+    attemptAutoStart()
+  }, [poolStatus?.isOwner, poolStatus?.poolBalance, addToast])
 
   useEffect(() => {
     const fetchRoundData = async () => {
@@ -46,6 +85,7 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
 
         const status = await getPoolStatus(provider, userAddress)
         setPoolStatus(status)
+        console.log("[v0] Pool status:", status)
 
         const roundData = await getCurrentRound(provider)
         console.log("[v0] Round data received:", roundData)
@@ -61,40 +101,6 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
 
         console.log("[v0] Round info - Active:", roundInfo.active, "RoundId:", roundInfo.roundId)
         setRound(roundInfo)
-
-        if (status.isOwner) {
-          console.log("[v0] User is owner. Checking if auto-start needed...")
-          console.log(
-            "[v0] Current round active:",
-            roundInfo.active,
-            "Pool balance:",
-            formatEther(status.poolBalance),
-            "BNB",
-          )
-
-          if (!roundInfo.active && status.poolBalance > 0n) {
-            console.log("[v0] Attempting auto-start: round inactive + has balance")
-            try {
-              await startNewRound(provider)
-              console.log("[v0] Auto-started new round successfully!")
-              addToast("新轮次已自动启动！", "success")
-              // Refresh immediately after successful start
-              setTimeout(() => {
-                console.log("[v0] Refreshing after auto-start...")
-                fetchRoundData()
-              }, 2000)
-              return
-            } catch (err: any) {
-              const errMsg = err.message || String(err)
-              if (errMsg.includes("Please wait")) {
-                console.log("[v0] Auto-start blocked by cooldown - will retry later:", errMsg)
-              } else {
-                console.log("[v0] Auto-start failed:", errMsg)
-                addToast(errMsg, "warning")
-              }
-            }
-          }
-        }
 
         // Fetch packets only if round is active
         if (roundInfo.active && roundInfo.packetCount > 0) {
@@ -130,9 +136,9 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
     }
 
     fetchRoundData()
-    const interval = setInterval(fetchRoundData, 10000)
+    const interval = setInterval(fetchRoundData, 5000)
     return () => clearInterval(interval)
-  }, [userAddress, addToast])
+  }, [userAddress, addToast, autoStartAttempted])
 
   useEffect(() => {
     const timer = setInterval(() => {
