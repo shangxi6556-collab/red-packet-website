@@ -54,7 +54,21 @@ export const CONTRACTS = {
       },
       {
         inputs: [],
+        name: "lastRoundTime",
+        outputs: [{ name: "", type: "uint256" }],
+        stateMutability: "view",
+        type: "function",
+      },
+      {
+        inputs: [],
         name: "startNewRound",
+        outputs: [],
+        stateMutability: "nonpayable",
+        type: "function",
+      },
+      {
+        inputs: [{ name: "roundId", type: "uint256" }],
+        name: "refundExpiredPackets",
         outputs: [],
         stateMutability: "nonpayable",
         type: "function",
