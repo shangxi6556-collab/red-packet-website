@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect } from "react"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { BrowserProvider } from "ethers"
@@ -32,7 +32,6 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
   const [startingRound, setStartingRound] = useState(false)
   const [autoStartStatus, setAutoStartStatus] = useState<string>("")
   const [autoManaging, setAutoManaging] = useState(false)
-  const autoStartTriggeredRef = useRef(false)
   const { addToast } = useToast()
 
   useEffect(() => {
@@ -64,46 +63,54 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
         const timeElapsed = now - startTime
 
         if (roundActive && timeElapsed > PACKET_EXPIRY && currentRoundId > 0) {
-          setAutoStartStatus("检测到过期红包，正在自动回流...")
-          console.log("[v0] Packets expired, auto-calling refundExpiredPackets...")
+          setAutoStartStatus("检测到过期红包，准备自动回流...")
+          console.log("[v0] Packets expired, attempting auto-refund...")
 
           try {
+            addToast("检测到过期红包，正在自动回流，请在钱包中确认...", "info")
             await refundExpiredPackets(provider, currentRoundId)
             console.log("[v0] Expired packets refunded successfully")
             setAutoStartStatus("✓ 过期红包已回流！准备启动新轮次...")
             addToast("过期红包已自动回流", "success")
 
-            // Wait 3 seconds then try to start new round
             await new Promise((resolve) => setTimeout(resolve, 3000))
+            return
           } catch (refundErr: any) {
             console.log("[v0] Auto-refund error:", refundErr)
-            const msg = refundErr.message || String(refundErr)
+            const msg = translateError(refundErr)
             setAutoStartStatus(`自动回流失败: ${msg.substring(0, 50)}`)
-            addToast(`回流失败: ${msg.substring(0, 50)}`, "warning")
+            if (!msg.includes("用户拒绝") && !msg.includes("rejected")) {
+              addToast(`回流失败: ${msg.substring(0, 50)}`, "warning")
+            }
             return
           }
         }
 
         if (!roundActive && poolBalance > 0n) {
-          setAutoStartStatus("条件满足，正在自动启动新轮次...")
-          console.log("[v0] Auto-starting new round...")
+          setAutoStartStatus("条件满足，准备自动启动新轮次...")
+          console.log("[v0] Attempting auto-start new round...")
 
           try {
+            addToast("正在自动启动新轮次，请在钱包中确认...", "info")
             await startNewRound(provider)
             console.log("[v0] Auto-start successful!")
             setAutoStartStatus("✓ 新轮次已自动启动！")
-            addToast("新轮次已自动启动！", "success")
-            autoStartTriggeredRef.current = true
+            addToast("新轮次已自动启动！页面即将刷新...", "success")
 
-            // Reload after 2 seconds
             setTimeout(() => {
               window.location.reload()
             }, 2000)
           } catch (err: any) {
-            const msg = err.message || String(err)
+            const msg = translateError(err)
             console.log("[v0] Auto-start failed:", msg)
-            if (msg.includes("Please wait")) {
-              const match = msg.match(/(\d+) minutes/)
+
+            if (msg.includes("用户拒绝") || msg.includes("rejected")) {
+              setAutoStartStatus("等待所有者确认交易...")
+              return
+            }
+
+            if (msg.includes("请等待")) {
+              const match = msg.match(/(\d+)/)
               const mins = match ? match[1] : "?"
               setAutoStartStatus(`⏳ 需要等待 ${mins} 分钟后才能启动新轮次`)
             } else {
@@ -135,7 +142,7 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
       }
     }
 
-    if (!userAddress || autoStartTriggeredRef.current) return
+    if (!userAddress) return
 
     checkAndAutoStart()
     const interval = setInterval(checkAndAutoStart, 10000)
@@ -328,7 +335,6 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
       const PACKET_EXPIRY = 10 * 60
       const timeElapsed = now - startTime
 
-      // Step 1: Check if need to refund expired packets
       if (roundActive && timeElapsed > PACKET_EXPIRY && currentRoundId > 0) {
         addToast("步骤 1/2: 正在回流过期红包，请在钱包中确认交易...", "info")
         console.log("[v0] Step 1: Refunding expired packets...")
@@ -338,7 +344,6 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
           addToast("✓ 过期红包已回流！", "success")
           console.log("[v0] Expired packets refunded successfully")
 
-          // Wait 3 seconds for transaction to confirm
           await new Promise((resolve) => setTimeout(resolve, 3000))
         } catch (refundErr: any) {
           console.error("[v0] Refund error:", refundErr)
@@ -347,7 +352,6 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
         }
       }
 
-      // Step 2: Start new round
       const status = await getPoolStatus(provider, userAddress)
       if (status.poolBalance > 0n) {
         addToast("步骤 2/2: 正在启动新轮次，请在钱包中确认交易...", "info")
@@ -358,7 +362,6 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
           addToast("✓ 新轮次已启动！页面即将刷新...", "success")
           console.log("[v0] New round started successfully")
 
-          // Reload page after 2 seconds
           setTimeout(() => {
             window.location.reload()
           }, 2000)
