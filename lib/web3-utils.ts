@@ -267,6 +267,25 @@ export async function claimPacket(provider: BrowserProvider, roundId: number, pa
   }
 }
 
+export async function refundExpiredPackets(provider: BrowserProvider, roundId: number) {
+  try {
+    console.log("[v0] Refunding expired packets for round:", roundId)
+    const signer = await provider.getSigner()
+    const contract = await getRedPacketPoolContract(signer)
+
+    const tx = await contract.refundExpiredPackets(roundId)
+    console.log("[v0] Refund transaction sent:", tx.hash)
+
+    const receipt = await tx.wait()
+    console.log("[v0] Refund transaction confirmed")
+
+    return receipt
+  } catch (err) {
+    console.error("[v0] Error refunding expired packets:", err)
+    throw err
+  }
+}
+
 export function formatBNB(amount: any) {
   try {
     return Number.parseFloat(formatEther(amount)).toFixed(4)

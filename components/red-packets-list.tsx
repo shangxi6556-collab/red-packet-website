@@ -12,6 +12,7 @@ import {
   getTimeRemaining,
   getPoolStatus,
   startNewRound,
+  refundExpiredPackets,
 } from "@/lib/web3-utils"
 import { useToast } from "@/components/toast-provider"
 import { translateError } from "@/lib/error-messages"
@@ -40,23 +41,45 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
 
         const provider = new BrowserProvider(window.ethereum)
 
-        // Get current pool status
         const status = await getPoolStatus(provider, userAddress)
         console.log("[v0] Auto-start check - Pool status:", status)
 
         if (!status.isOwner) {
           console.log("[v0] Not owner, skipping auto-start")
+          setAutoStartStatus("")
           return
         }
 
-        // Get current round data
         const roundData = await getCurrentRound(provider)
+        const currentRoundId = Number(roundData[0])
+        const startTime = Number(roundData[1])
         const roundActive = roundData[5]
         const poolBalance = status.poolBalance
 
-        console.log("[v0] Auto-start check - Round active:", roundActive, "Pool balance:", formatBNB(poolBalance))
+        console.log("[v0] Round info - ID:", currentRoundId, "Active:", roundActive, "Start:", startTime)
 
-        setAutoStartStatus(`检查中... 轮次活跃: ${roundActive}, 池余额: ${formatBNB(poolBalance)} BNB`)
+        const now = Math.floor(Date.now() / 1000)
+        const PACKET_EXPIRY = 10 * 60 // 10 minutes
+        const timeElapsed = now - startTime
+
+        if (roundActive && timeElapsed > PACKET_EXPIRY && currentRoundId > 0) {
+          setAutoStartStatus("检测到过期红包，正在回流...")
+          console.log("[v0] Packets expired, calling refundExpiredPackets...")
+
+          try {
+            await refundExpiredPackets(provider, currentRoundId)
+            console.log("[v0] Expired packets refunded successfully")
+            setAutoStartStatus("✓ 过期红包已回流，准备启动新轮次...")
+            addToast("过期红包已回流", "success")
+
+            await new Promise((resolve) => setTimeout(resolve, 2000))
+          } catch (refundErr: any) {
+            console.log("[v0] Refund error:", refundErr)
+            const msg = refundErr.message || String(refundErr)
+            setAutoStartStatus(`回流失败: ${msg.substring(0, 50)}`)
+            return
+          }
+        }
 
         if (!roundActive && poolBalance > 0n) {
           setAutoStartStatus("条件满足，正在自动启动新轮次...")
@@ -69,14 +92,15 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
             addToast("新轮次已自动启动！", "success")
             autoStartTriggeredRef.current = true
 
-            // Wait and reload to show new round
             await new Promise((resolve) => setTimeout(resolve, 2000))
             window.location.reload()
           } catch (err: any) {
             const msg = err.message || String(err)
             console.log("[v0] Auto-start failed:", msg)
             if (msg.includes("Please wait")) {
-              setAutoStartStatus(`⏳ ${msg}`)
+              const match = msg.match(/(\d+) minutes/)
+              const mins = match ? match[1] : "?"
+              setAutoStartStatus(`⏳ 需要等待 ${mins} 分钟后才能启动新轮次`)
             } else {
               setAutoStartStatus(`✗ 启动失败: ${msg.substring(0, 50)}`)
             }
@@ -84,28 +108,30 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
         } else {
           let reason = ""
           if (!poolBalance || poolBalance === 0n) {
-            reason = "⚠️ 池中没有BNB，无法启动"
+            reason = "⚠️ 池中没有BNB，无法启动新轮次"
           } else if (roundActive) {
-            reason = "当前轮次仍活跃"
+            const remaining = PACKET_EXPIRY - timeElapsed
+            if (remaining > 0) {
+              const mins = Math.floor(remaining / 60)
+              reason = `当前轮次仍活跃 (${mins}分钟后过期)`
+            } else {
+              reason = "当前轮次已过期，等待回流..."
+            }
           } else {
-            reason = "等待条件满足..."
+            reason = "等待启动条件..."
           }
           setAutoStartStatus(reason)
         }
       } catch (err) {
         console.log("[v0] Auto-start check error:", err)
-        setAutoStartStatus(`错误: ${String(err).substring(0, 40)}`)
+        setAutoStartStatus(`检查错误: ${String(err).substring(0, 40)}`)
       }
     }
 
-    // Only check if user address exists and hasn't already auto-started
     if (!userAddress || autoStartTriggeredRef.current) return
 
-    // Check immediately on mount
     checkAndAutoStart()
-
-    // Then check every 30 seconds
-    const interval = setInterval(checkAndAutoStart, 30000)
+    const interval = setInterval(checkAndAutoStart, 15000) // Check every 15 seconds
     return () => clearInterval(interval)
   }, [userAddress, addToast])
 
@@ -140,7 +166,6 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
         console.log("[v0] Round info - Active:", roundInfo.active, "RoundId:", roundInfo.roundId)
         setRound(roundInfo)
 
-        // Fetch packets only if round is active
         if (roundInfo.active && roundInfo.packetCount > 0) {
           const packetsList = []
           for (let i = 0; i < roundInfo.packetCount; i++) {
