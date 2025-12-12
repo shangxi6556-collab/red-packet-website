@@ -59,31 +59,33 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
         console.log("[v0] Round info - ID:", currentRoundId, "Active:", roundActive, "Start:", startTime)
 
         const now = Math.floor(Date.now() / 1000)
-        const PACKET_EXPIRY = 10 * 60 // 10 minutes
+        const PACKET_EXPIRY = 10 * 60
         const timeElapsed = now - startTime
 
         if (roundActive && timeElapsed > PACKET_EXPIRY && currentRoundId > 0) {
-          setAutoStartStatus("检测到过期红包，正在回流...")
-          console.log("[v0] Packets expired, calling refundExpiredPackets...")
+          setAutoStartStatus("检测到过期红包，正在自动回流...")
+          console.log("[v0] Packets expired, auto-calling refundExpiredPackets...")
 
           try {
             await refundExpiredPackets(provider, currentRoundId)
             console.log("[v0] Expired packets refunded successfully")
-            setAutoStartStatus("✓ 过期红包已回流，准备启动新轮次...")
-            addToast("过期红包已回流", "success")
+            setAutoStartStatus("✓ 过期红包已回流！准备启动新轮次...")
+            addToast("过期红包已自动回流", "success")
 
-            await new Promise((resolve) => setTimeout(resolve, 2000))
+            // Wait 3 seconds then try to start new round
+            await new Promise((resolve) => setTimeout(resolve, 3000))
           } catch (refundErr: any) {
-            console.log("[v0] Refund error:", refundErr)
+            console.log("[v0] Auto-refund error:", refundErr)
             const msg = refundErr.message || String(refundErr)
-            setAutoStartStatus(`回流失败: ${msg.substring(0, 50)}`)
+            setAutoStartStatus(`自动回流失败: ${msg.substring(0, 50)}`)
+            addToast(`回流失败: ${msg.substring(0, 50)}`, "warning")
             return
           }
         }
 
         if (!roundActive && poolBalance > 0n) {
           setAutoStartStatus("条件满足，正在自动启动新轮次...")
-          console.log("[v0] Conditions met, attempting auto-start...")
+          console.log("[v0] Auto-starting new round...")
 
           try {
             await startNewRound(provider)
@@ -92,8 +94,10 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
             addToast("新轮次已自动启动！", "success")
             autoStartTriggeredRef.current = true
 
-            await new Promise((resolve) => setTimeout(resolve, 2000))
-            window.location.reload()
+            // Reload after 2 seconds
+            setTimeout(() => {
+              window.location.reload()
+            }, 2000)
           } catch (err: any) {
             const msg = err.message || String(err)
             console.log("[v0] Auto-start failed:", msg)
@@ -102,7 +106,8 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
               const mins = match ? match[1] : "?"
               setAutoStartStatus(`⏳ 需要等待 ${mins} 分钟后才能启动新轮次`)
             } else {
-              setAutoStartStatus(`✗ 启动失败: ${msg.substring(0, 50)}`)
+              setAutoStartStatus(`启动失败: ${msg.substring(0, 50)}`)
+              addToast(`自动启动失败: ${msg.substring(0, 50)}`, "warning")
             }
           }
         } else {
@@ -113,9 +118,10 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
             const remaining = PACKET_EXPIRY - timeElapsed
             if (remaining > 0) {
               const mins = Math.floor(remaining / 60)
-              reason = `当前轮次仍活跃 (${mins}分钟后过期)`
+              const secs = remaining % 60
+              reason = `当前轮次仍活跃 (${mins}:${secs.toString().padStart(2, "0")} 后过期)`
             } else {
-              reason = "当前轮次已过期，等待回流..."
+              reason = "当前轮次已过期，准备回流..."
             }
           } else {
             reason = "等待启动条件..."
@@ -131,7 +137,7 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
     if (!userAddress || autoStartTriggeredRef.current) return
 
     checkAndAutoStart()
-    const interval = setInterval(checkAndAutoStart, 15000) // Check every 15 seconds
+    const interval = setInterval(checkAndAutoStart, 10000)
     return () => clearInterval(interval)
   }, [userAddress, addToast])
 

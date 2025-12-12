@@ -77,6 +77,31 @@ export async function getPoolStatus(provider: BrowserProvider, userAddress: stri
   }
 }
 
+// Function to get high gas fee settings for BSC testnet
+async function getHighGasSettings(provider: BrowserProvider) {
+  try {
+    const feeData = await provider.getFeeData()
+    const gasPrice = feeData.gasPrice || 0n
+
+    // Set to 150% of current gas price (first tier / high priority)
+    const highGasPrice = (gasPrice * 150n) / 100n
+
+    console.log("[v0] Gas price - Current:", formatEther(gasPrice), "High:", formatEther(highGasPrice))
+
+    return {
+      gasPrice: highGasPrice,
+      gasLimit: 500000n, // Set a reasonable gas limit
+    }
+  } catch (err) {
+    console.error("[v0] Error getting gas settings:", err)
+    // Fallback to 5 Gwei for BSC testnet
+    return {
+      gasPrice: 5000000000n, // 5 Gwei
+      gasLimit: 500000n,
+    }
+  }
+}
+
 export async function startNewRound(provider: BrowserProvider) {
   try {
     console.log("[v0] Starting new red packet round...")
@@ -126,8 +151,10 @@ export async function startNewRound(provider: BrowserProvider) {
     }
 
     console.log("[v0] All pre-flight checks passed. Calling startNewRound...")
-    const tx = await contract.startNewRound()
-    console.log("[v0] Start round transaction sent:", tx.hash)
+
+    const gasSettings = await getHighGasSettings(provider)
+    const tx = await contract.startNewRound({ gasPrice: gasSettings.gasPrice, gasLimit: gasSettings.gasLimit })
+    console.log("[v0] Start round transaction sent:", tx.hash, "with gas price:", formatEther(gasSettings.gasPrice))
 
     const receipt = await tx.wait()
     console.log("[v0] Start round transaction confirmed")
@@ -254,8 +281,13 @@ export async function claimPacket(provider: BrowserProvider, roundId: number, pa
     const contract = await getRedPacketPoolContract(signer)
 
     console.log("[v0] Calling claimPacket...")
-    const tx = await contract.claimPacket(roundId, packetId)
-    console.log("[v0] Claim transaction sent:", tx.hash)
+
+    const gasSettings = await getHighGasSettings(provider)
+    const tx = await contract.claimPacket(roundId, packetId, {
+      gasPrice: gasSettings.gasPrice,
+      gasLimit: gasSettings.gasLimit,
+    })
+    console.log("[v0] Claim transaction sent:", tx.hash, "with gas price:", formatEther(gasSettings.gasPrice))
 
     const receipt = await tx.wait()
     console.log("[v0] Claim transaction confirmed:", receipt)
@@ -273,8 +305,12 @@ export async function refundExpiredPackets(provider: BrowserProvider, roundId: n
     const signer = await provider.getSigner()
     const contract = await getRedPacketPoolContract(signer)
 
-    const tx = await contract.refundExpiredPackets(roundId)
-    console.log("[v0] Refund transaction sent:", tx.hash)
+    const gasSettings = await getHighGasSettings(provider)
+    const tx = await contract.refundExpiredPackets(roundId, {
+      gasPrice: gasSettings.gasPrice,
+      gasLimit: gasSettings.gasLimit,
+    })
+    console.log("[v0] Refund transaction sent:", tx.hash, "with gas price:", formatEther(gasSettings.gasPrice))
 
     const receipt = await tx.wait()
     console.log("[v0] Refund transaction confirmed")
