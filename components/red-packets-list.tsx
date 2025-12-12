@@ -31,6 +31,7 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
   const [poolStatus, setPoolStatus] = useState<any>(null)
   const [startingRound, setStartingRound] = useState(false)
   const [autoStartStatus, setAutoStartStatus] = useState<string>("")
+  const [autoManaging, setAutoManaging] = useState(false)
   const autoStartTriggeredRef = useRef(false)
   const { addToast } = useToast()
 
@@ -308,6 +309,74 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
     }
   }
 
+  const handleAutoManage = async () => {
+    try {
+      setAutoManaging(true)
+
+      if (!window.ethereum) {
+        addToast("未检测到 MetaMask 钱包", "error")
+        return
+      }
+
+      const provider = new BrowserProvider(window.ethereum)
+      const roundData = await getCurrentRound(provider)
+      const currentRoundId = Number(roundData[0])
+      const startTime = Number(roundData[1])
+      const roundActive = roundData[5]
+
+      const now = Math.floor(Date.now() / 1000)
+      const PACKET_EXPIRY = 10 * 60
+      const timeElapsed = now - startTime
+
+      // Step 1: Check if need to refund expired packets
+      if (roundActive && timeElapsed > PACKET_EXPIRY && currentRoundId > 0) {
+        addToast("步骤 1/2: 正在回流过期红包，请在钱包中确认交易...", "info")
+        console.log("[v0] Step 1: Refunding expired packets...")
+
+        try {
+          await refundExpiredPackets(provider, currentRoundId)
+          addToast("✓ 过期红包已回流！", "success")
+          console.log("[v0] Expired packets refunded successfully")
+
+          // Wait 3 seconds for transaction to confirm
+          await new Promise((resolve) => setTimeout(resolve, 3000))
+        } catch (refundErr: any) {
+          console.error("[v0] Refund error:", refundErr)
+          addToast(translateError(refundErr), "error")
+          return
+        }
+      }
+
+      // Step 2: Start new round
+      const status = await getPoolStatus(provider, userAddress)
+      if (status.poolBalance > 0n) {
+        addToast("步骤 2/2: 正在启动新轮次，请在钱包中确认交易...", "info")
+        console.log("[v0] Step 2: Starting new round...")
+
+        try {
+          await startNewRound(provider)
+          addToast("✓ 新轮次已启动！页面即将刷新...", "success")
+          console.log("[v0] New round started successfully")
+
+          // Reload page after 2 seconds
+          setTimeout(() => {
+            window.location.reload()
+          }, 2000)
+        } catch (startErr: any) {
+          console.error("[v0] Start round error:", startErr)
+          addToast(translateError(startErr), "error")
+        }
+      } else {
+        addToast("池中没有 BNB，无法启动新轮次", "warning")
+      }
+    } catch (err) {
+      console.error("[v0] Auto manage error:", err)
+      addToast(translateError(err), "error")
+    } finally {
+      setAutoManaging(false)
+    }
+  }
+
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
     const secs = seconds % 60
@@ -330,18 +399,33 @@ export function RedPacketsList({ userAddress, userEligible }: RedPacketsListProp
               池余额: <span className="font-semibold text-blue-600">{formatBNB(poolStatus.poolBalance)} BNB</span>
             </p>
             {poolStatus.isOwner && (
-              <div className="pt-2 space-y-2">
+              <div className="pt-2 space-y-3">
                 <p className="text-xs text-gray-600">✓ 您是合约所有者</p>
                 {autoStartStatus && (
                   <p className="text-xs text-blue-600 bg-blue-100 p-2 rounded break-words">{autoStartStatus}</p>
                 )}
-                <Button
-                  onClick={handleStartRound}
-                  disabled={startingRound}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white"
-                >
-                  {startingRound ? "正在启动轮次..." : "手动启动新轮次"}
-                </Button>
+
+                <div className="space-y-2">
+                  <Button
+                    onClick={handleAutoManage}
+                    disabled={autoManaging}
+                    className="w-full bg-gradient-to-r from-red-600 to-orange-600 hover:from-red-700 hover:to-orange-700 text-white font-semibold"
+                  >
+                    {autoManaging ? "🔄 处理中..." : "🚀 一键管理红包池"}
+                  </Button>
+                  <p className="text-xs text-gray-500 text-center">自动回流过期红包并启动新轮次（需确认 1-2 次交易）</p>
+                </div>
+
+                <div className="border-t pt-2">
+                  <Button
+                    onClick={handleStartRound}
+                    disabled={startingRound}
+                    variant="outline"
+                    className="w-full bg-transparent"
+                  >
+                    {startingRound ? "正在启动轮次..." : "仅启动新轮次"}
+                  </Button>
+                </div>
               </div>
             )}
           </div>
