@@ -27,26 +27,63 @@ const RED_PACKET_POOL_ABI = [
 const ROUND_INTERVAL = 3600 // 1小时
 const EXPIRY_TIME = 600 // 10分钟
 
+const BSC_TESTNET_RPC_URLS = [
+  "https://bsc-testnet-rpc.publicnode.com",
+  "https://bsc-testnet.publicnode.com",
+  "https://data-seed-prebsc-1-s1.bnbchain.org:8545",
+  "https://data-seed-prebsc-2-s1.bnbchain.org:8545",
+]
+
 class RedPacketAutoManager {
   private provider: ethers.JsonRpcProvider
   private wallet: ethers.Wallet
   private contract: ethers.Contract
   private isRunning = false
+  private currentRpcIndex = 0
 
   constructor(privateKey: string) {
     console.log("🚀 初始化红包自动管理服务...")
 
     // 连接到 BSC 测试网
-    this.provider = new ethers.JsonRpcProvider(CONFIG.RPC_URL, CONFIG.CHAIN_ID)
+    this.provider = this.createProvider()
 
-    // 使用私钥创建钱包
     this.wallet = new ethers.Wallet(privateKey, this.provider)
 
-    // 创建合约实例
     this.contract = new ethers.Contract(CONFIG.RED_PACKET_POOL_ADDRESS, RED_PACKET_POOL_ABI, this.wallet)
 
     console.log(`✅ 钱包地址: ${this.wallet.address}`)
     console.log(`✅ 合约地址: ${CONFIG.RED_PACKET_POOL_ADDRESS}`)
+    console.log(`✅ RPC 节点: ${BSC_TESTNET_RPC_URLS[this.currentRpcIndex]}`)
+  }
+
+  private createProvider(): ethers.JsonRpcProvider {
+    const provider = new ethers.JsonRpcProvider(BSC_TESTNET_RPC_URLS[this.currentRpcIndex], {
+      chainId: CONFIG.CHAIN_ID,
+      name: "BSC Testnet",
+    })
+    return provider
+  }
+
+  private async switchToNextRpc(): Promise<void> {
+    this.currentRpcIndex = (this.currentRpcIndex + 1) % BSC_TESTNET_RPC_URLS.length
+    console.log(`🔄 切换到备用 RPC: ${BSC_TESTNET_RPC_URLS[this.currentRpcIndex]}`)
+
+    this.provider = this.createProvider()
+    this.wallet = new ethers.Wallet(this.wallet.privateKey, this.provider)
+    this.contract = new ethers.Contract(CONFIG.RED_PACKET_POOL_ADDRESS, RED_PACKET_POOL_ABI, this.wallet)
+  }
+
+  async testConnection(): Promise<boolean> {
+    try {
+      const network = await this.provider.getNetwork()
+      const blockNumber = await this.provider.getBlockNumber()
+      console.log(`✅ 网络连接成功: ${network.name} (Chain ID: ${network.chainId})`)
+      console.log(`✅ 当前区块高度: ${blockNumber}`)
+      return true
+    } catch (error: any) {
+      console.error(`❌ 网络连接失败: ${error.message}`)
+      return false
+    }
   }
 
   // 检查钱包余额
@@ -78,8 +115,13 @@ class RedPacketAutoManager {
         startTime: round[3],
         active: round[4],
       }
-    } catch (error) {
-      console.error("❌ 获取当前轮次失败:", error)
+    } catch (error: any) {
+      console.error("❌ 获取当前轮次失败:", error.message)
+
+      if (error.message.includes("network") || error.message.includes("timeout")) {
+        await this.switchToNextRpc()
+      }
+
       return null
     }
   }
@@ -141,29 +183,36 @@ class RedPacketAutoManager {
   // 启动新轮次
   async startNewRound(): Promise<boolean> {
     try {
-      // 检查时间间隔
       const lastRoundTime = await this.contract.lastRoundTime()
       const currentTime = Math.floor(Date.now() / 1000)
       const timeSinceLastRound = currentTime - Number(lastRoundTime)
 
+      console.log(`⏰ 时间检查:`)
+      console.log(`   上次轮次时间: ${new Date(Number(lastRoundTime) * 1000).toLocaleString("zh-CN")}`)
+      console.log(`   当前时间: ${new Date(currentTime * 1000).toLocaleString("zh-CN")}`)
+      console.log(`   已过时间: ${Math.floor(timeSinceLastRound / 60)} 分钟`)
+      console.log(`   需要间隔: ${ROUND_INTERVAL / 60} 分钟`)
+
       if (timeSinceLastRound < ROUND_INTERVAL) {
         const remainingTime = ROUND_INTERVAL - timeSinceLastRound
-        console.log(`⏰ 需要等待 ${Math.floor(remainingTime / 60)} 分钟后才能启动新轮次`)
+        console.log(`⏰ 还需等待 ${Math.floor(remainingTime / 60)} 分钟 ${remainingTime % 60} 秒`)
         return false
       }
 
-      // 检查池余额
       const poolBalance = await this.contract.poolBalance()
+      console.log(`💰 红包池余额: ${ethers.formatEther(poolBalance)} BNB`)
+
       if (poolBalance === 0n) {
         console.log("⚠️  红包池余额为 0，无法启动新轮次")
         return false
       }
 
-      console.log(`🚀 开始启动新轮次... (池余额: ${ethers.formatEther(poolBalance)} BNB)`)
+      console.log(`🚀 满足启动条件，开始启动新轮次...`)
 
-      // 设置高 Gas 费用
       const feeData = await this.provider.getFeeData()
       const gasPrice = feeData.gasPrice ? (feeData.gasPrice * 150n) / 100n : undefined
+
+      console.log(`⛽ Gas 价格: ${ethers.formatUnits(gasPrice || 0n, "gwei")} Gwei`)
 
       const tx = await this.contract.startNewRound({
         gasPrice,
@@ -171,12 +220,15 @@ class RedPacketAutoManager {
       })
 
       console.log(`📤 交易已发送: ${tx.hash}`)
+      console.log(`🔗 查看交易: https://testnet.bscscan.com/tx/${tx.hash}`)
       console.log("⏳ 等待交易确认...")
 
       const receipt = await tx.wait()
 
       if (receipt.status === 1) {
-        console.log(`✅ 新轮次启动成功! Gas 使用: ${receipt.gasUsed.toString()}`)
+        console.log(`✅ 新轮次启动成功!`)
+        console.log(`   Gas 使用: ${receipt.gasUsed.toString()}`)
+        console.log(`   区块高度: ${receipt.blockNumber}`)
         return true
       } else {
         console.log("❌ 启动失败: 交易被回退")
@@ -184,6 +236,11 @@ class RedPacketAutoManager {
       }
     } catch (error: any) {
       console.error("❌ 启动新轮次失败:", error.message)
+
+      if (error.message.includes("network") || error.message.includes("timeout")) {
+        await this.switchToNextRpc()
+      }
+
       return false
     }
   }
@@ -191,14 +248,18 @@ class RedPacketAutoManager {
   // 主循环
   async run(): Promise<void> {
     console.log("\n" + "=".repeat(60))
-    console.log("🔍 检查红包池状态...")
+    console.log(`🔍 检查红包池状态 [${new Date().toLocaleString("zh-CN")}]`)
     console.log("=".repeat(60) + "\n")
 
     try {
-      // 检查余额
+      const connected = await this.testConnection()
+      if (!connected) {
+        console.log("⚠️  网络连接失败，等待下次重试...")
+        return
+      }
+
       await this.checkBalance()
 
-      // 获取当前轮次
       const currentRound = await this.getCurrentRound()
 
       if (!currentRound) {
@@ -208,12 +269,12 @@ class RedPacketAutoManager {
       }
 
       console.log(`📦 当前轮次: ${currentRound.roundNumber}`)
-      console.log(`   状态: ${currentRound.active ? "活跃" : "非活跃"}`)
+      console.log(`   状态: ${currentRound.active ? "✅ 活跃" : "❌ 非活跃"}`)
       console.log(`   红包数量: ${currentRound.packetCount}`)
       console.log(`   总金额: ${ethers.formatEther(currentRound.totalAmount)} BNB`)
+      console.log(`   开始时间: ${new Date(Number(currentRound.startTime) * 1000).toLocaleString("zh-CN")}`)
 
       if (currentRound.active) {
-        // 检查是否过期
         const isExpired = await this.checkExpiredPackets(currentRound.roundNumber)
 
         if (isExpired) {
@@ -221,25 +282,25 @@ class RedPacketAutoManager {
           const refunded = await this.refundExpiredPackets(currentRound.roundNumber)
 
           if (refunded) {
-            // 回流成功后等待 3 秒，然后尝试启动新轮次
             console.log("⏳ 等待 3 秒后启动新轮次...")
             await new Promise((resolve) => setTimeout(resolve, 3000))
             await this.startNewRound()
           }
         } else {
-          console.log("✅ 当前轮次仍在有效期内")
+          const currentTime = Math.floor(Date.now() / 1000)
+          const timeLeft = Number(currentRound.startTime) + EXPIRY_TIME - currentTime
+          console.log(`✅ 当前轮次仍在有效期内 (还剩 ${Math.floor(timeLeft / 60)} 分钟 ${timeLeft % 60} 秒)`)
         }
       } else {
-        // 轮次不活跃，尝试启动新轮次
         console.log("📭 当前轮次已结束，尝试启动新轮次...")
         await this.startNewRound()
       }
-    } catch (error) {
-      console.error("❌ 执行失败:", error)
+    } catch (error: any) {
+      console.error("❌ 执行失败:", error.message)
     }
 
     console.log("\n" + "=".repeat(60))
-    console.log(`⏰ 下次检查时间: ${new Date(Date.now() + CONFIG.CHECK_INTERVAL).toLocaleString("zh-CN")}`)
+    console.log(`⏰ 下次检查: ${new Date(Date.now() + CONFIG.CHECK_INTERVAL).toLocaleString("zh-CN")}`)
     console.log("=".repeat(60) + "\n")
   }
 
